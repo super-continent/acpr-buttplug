@@ -1,7 +1,7 @@
 use std::arch::asm;
 
 use crate::helpers::Offset;
-use detour2::RawDetour;
+use detour::RawDetour;
 use once_cell::sync::OnceCell;
 const HANDLE_HIT_OFFSET: Offset = Offset::new(0x11AA80);
 
