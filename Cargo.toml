@@ -1,0 +1,28 @@
+[package]
+name = "acpr_buttplug"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+name = "dinput8"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+windows = { version = "0.43", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_System_Console",
+] }
+once_cell = "*"
+log = { version = "0.4", features = ["serde"] }
+simplelog = "0.12.0"
+buttplug = { version = "6.2.2", features = ["xinput-manager"] }
+tokio = "1.23.0"
+futures = "0.3.25"
+detour = "0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.5"
