@@ -1,4 +1,4 @@
-# device vibration strength
+# device vibration strength, must be between 0.0 and 1.0
 vibration_strength = 1.0
 
 # each hit accumulates some amount of vibration time, set in milliseconds
