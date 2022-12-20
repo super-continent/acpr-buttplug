@@ -23,6 +23,7 @@ use windows::{
 mod dll_code;
 mod helpers;
 mod hooks;
+mod global;
 
 #[no_mangle]
 extern "system" fn DllMain(

@@ -1,7 +1,9 @@
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 
-unsafe fn get_module_base() -> isize {
-    GetModuleHandleA(None).expect("get module base").0
+fn get_module_base() -> isize {
+    unsafe {
+        GetModuleHandleA(None).expect("get module base").0
+    }
 }
 
 /// Type for finding the offset of something within a running program
@@ -13,7 +15,7 @@ impl Offset {
         Self(offset)
     }
 
-    pub unsafe fn get_address(&self) -> usize {
+    pub fn get_address(&self) -> usize {
         let base = get_module_base() as usize;
         base + self.0
     }

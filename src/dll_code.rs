@@ -24,7 +24,7 @@ use serde::Deserialize;
 use std::sync::mpsc::Sender;
 use tokio::{sync::Mutex, time::sleep};
 
-use crate::hooks;
+use crate::{hooks, global::{PLAYER_1_STATE, PLAYER_2_STATE}};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
@@ -39,6 +39,8 @@ pub enum Event {
 
 pub static CONFIG: OnceCell<Config> = OnceCell::new();
 pub static CHANNEL_TX: Lazy<Mutex<Option<Sender<Event>>>> = Lazy::new(|| Mutex::new(None));
+pub static HIT_CHANNEL_TX: Lazy<Mutex<Option<Sender<Event>>>> = Lazy::new(|| Mutex::new(None));
+
 const DEFAULT_CONFIG: &str = include_str!("default_config.toml");
 
 /// User code for initializing the DLL goes here
@@ -137,11 +139,21 @@ async fn run() {
                     let mut devices = DEVICES.lock().await;
                     devices.push(device);
                 }
-                ButtplugClientEvent::DeviceRemoved(info) => {
-                    log::info!("Device {} Removed!", info.name());
-                }
-                ButtplugClientEvent::ScanningFinished => {
-                    log::info!("Device scanning is finished!");
+                ButtplugClientEvent::DeviceRemoved(removed) => {
+                    log::info!("Device {} Removed!", removed.name());
+                    let mut devices = DEVICES.lock().await;
+
+                    // clear the device from our device list
+                    let mut disconnected_devices = Vec::new();
+                    for (idx, device) in devices.iter().enumerate() {
+                        if !device.connected() {
+                            disconnected_devices.push(idx);
+                        }
+                    }
+
+                    disconnected_devices.into_iter().for_each(|idx| {
+                        devices.remove(idx);
+                    });
                 }
                 _ => {}
             }
@@ -155,37 +167,67 @@ async fn run() {
     let (tx, rx) = std::sync::mpsc::channel::<Event>();
     // set up channels for communication between hook threads and event loop
     {
-        let mut channel = CHANNEL_TX.lock().await;
+        let mut channel = HIT_CHANNEL_TX.lock().await;
         *channel = Some(tx);
     }
 
     unsafe {
-        hooks::setup_hooks();
+        // currently broken due to some compiler optimization?
+        // game crashes on hit when built in release mode
+        // hooks::setup_hooks();
     }
 
-    while let Ok(a) = rx.recv() {
-        match a {
-            Event::Hit => {
-                log::trace!("hit!");
-                let mut vibes = Vec::new();
-                for dev in DEVICES.lock().await.iter() {
-                    vibes.push(vibrate_device(dev.clone()));
-                }
+    let mut hitstop = 0;
 
-                for vibe in vibes {
-                    vibe.await
-                }
-            }
+    loop {
+        tokio::time::sleep(Duration::from_millis(16)).await;
+        unsafe {
+            hitstop = get_current_hitstop();
         }
+
+        if hitstop == 0 {
+            continue
+        }
+
+        log::trace!("hitstop = {hitstop}");
+
+        let strength = hitstop as f64 / 60.0;
+
+        log::trace!("vibrating at {strength}");
+
+        let mut vibes = Vec::new();
+        for dev in DEVICES.lock().await.iter() {
+            vibes.push(vibrate_device(dev.clone(), strength));
+        }
+
+        for vibe in vibes {
+            vibe.await
+        }
+
+        continue;
     }
 }
 
-async fn vibrate_device(dev: Arc<ButtplugClientDevice>) {
+unsafe fn get_current_hitstop() -> u8 {
+    let player1_addr = PLAYER_1_STATE.get_address() as *const *const u8;
+    let player2_addr = PLAYER_2_STATE.get_address() as *const *const u8;
+
+    if (*player1_addr).is_null() || (*player2_addr).is_null() {
+        return 0
+    }
+
+    let p1_hitstop = (*player1_addr).offset(0xFD).read_unaligned();
+    let p2_hitstop = (*player2_addr).offset(0xFD).read_unaligned();
+
+    p1_hitstop.max(p2_hitstop)
+}
+
+async fn vibrate_device(dev: Arc<ButtplugClientDevice>, strength: f64) {
     let config = CONFIG.get().expect("config should exist");
 
     if dev.message_attributes().scalar_cmd().is_some() {
         if let Err(e) = dev
-            .vibrate(&VibrateCommand::Speed(config.vibration_strength))
+            .vibrate(&VibrateCommand::Speed((strength * config.vibration_strength).clamp(0.0, 1.0)))
             .await
         {
             log::error!("Error sending vibrate command to device! {}", e);

@@ -3,6 +3,7 @@ use std::arch::asm;
 use crate::helpers::Offset;
 use detour::RawDetour;
 use once_cell::sync::OnceCell;
+
 const HANDLE_HIT_OFFSET: Offset = Offset::new(0x11AA80);
 
 static HIT_OFFSET_DETOUR: OnceCell<RawDetour> = OnceCell::new();
@@ -55,7 +56,7 @@ unsafe extern "thiscall" fn hit_hook(this: usize, arg2: usize, arg3: usize) {
     use crate::dll_code::Event;
     log::trace!("called hit_hook with arg: {:X?}", arg2);
 
-    if let Some(channel) = crate::dll_code::CHANNEL_TX.blocking_lock().as_mut() {
+    if let Some(channel) = crate::dll_code::HIT_CHANNEL_TX.blocking_lock().as_mut() {
         channel.send(Event::Hit).expect("Sending Event across channel");
     }
 
