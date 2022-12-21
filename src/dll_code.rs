@@ -24,12 +24,14 @@ use serde::Deserialize;
 use std::sync::mpsc::Sender;
 use tokio::{sync::Mutex, time::sleep};
 
-use crate::{hooks, global::{PLAYER_1_STATE, PLAYER_2_STATE}};
+use crate::{
+    global::{PLAYER_1_STATE, PLAYER_2_STATE},
+    hooks,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct Config {
     vibration_strength: f64,
-    vibration_time: u64,
     log_level: LevelFilter,
 }
 
@@ -57,7 +59,6 @@ pub fn initialize() {
     let config = CONFIG.get_or_init(|| {
         config_result.unwrap_or(Config {
             vibration_strength: 1.0,
-            vibration_time: 300,
             log_level: LevelFilter::Error,
         })
     });
@@ -177,27 +178,42 @@ async fn run() {
         // hooks::setup_hooks();
     }
 
-    let mut hitstop = 0;
-
+    let mut stopped_vibration = false;
     loop {
-        tokio::time::sleep(Duration::from_millis(16)).await;
-        unsafe {
-            hitstop = get_current_hitstop();
-        }
-
+        tokio::time::sleep(Duration::from_millis(7)).await;
+        let hitstop = unsafe { get_current_hitstop() / 2 };
+        let in_hitstun = unsafe { either_player_in_hitstop() };
         if hitstop == 0 {
-            continue
+            if stopped_vibration {
+                continue;
+            }
+
+            let mut vibes = Vec::new();
+            for dev in DEVICES.lock().await.iter() {
+                vibes.push(stop_vibration(dev.clone()));
+            }
+
+            for vibe in vibes {
+                vibe.await
+            }
+            stopped_vibration = true;
+            continue;
         }
 
-        log::trace!("hitstop = {hitstop}");
+        stopped_vibration = false;
 
-        let strength = hitstop as f64 / 60.0;
+        let mut intensity = hitstop_to_vibe_intensity(hitstop.into());
 
-        log::trace!("vibrating at {strength}");
+        // if a move was blocked, we make the vibration less intense
+        if !in_hitstun {
+            intensity /= 2.0
+        }
+
+        log::trace!("vibrating at {intensity}");
 
         let mut vibes = Vec::new();
         for dev in DEVICES.lock().await.iter() {
-            vibes.push(vibrate_device(dev.clone(), strength));
+            vibes.push(vibrate_device(dev.clone(), intensity));
         }
 
         for vibe in vibes {
@@ -208,12 +224,19 @@ async fn run() {
     }
 }
 
+fn hitstop_to_vibe_intensity(hitstop: f64) -> f64 {
+    // highest possible hitstop for a normal is 27f
+    // moving this to 28 allows edge cases to have a bigger response
+    // anything above 1.0 gets clamped down to the range 0-1 for vibration
+    (hitstop / 28.0).clamp(0.0, 1.0)
+}
+
 unsafe fn get_current_hitstop() -> u8 {
     let player1_addr = PLAYER_1_STATE.get_address() as *const *const u8;
     let player2_addr = PLAYER_2_STATE.get_address() as *const *const u8;
 
     if (*player1_addr).is_null() || (*player2_addr).is_null() {
-        return 0
+        return 0;
     }
 
     let p1_hitstop = (*player1_addr).offset(0xFD).read_unaligned();
@@ -222,25 +245,43 @@ unsafe fn get_current_hitstop() -> u8 {
     p1_hitstop.max(p2_hitstop)
 }
 
+unsafe fn either_player_in_hitstop() -> bool {
+    let player1_addr = PLAYER_1_STATE.get_address() as *const *const u8;
+    let player2_addr = PLAYER_2_STATE.get_address() as *const *const u8;
+
+    if (*player1_addr).is_null() || (*player2_addr).is_null() {
+        return false;
+    }
+
+    let p1_in_hitstun = ((*player1_addr).offset(0xC).read_unaligned() | 0b000001) != 0;
+    let p2_in_hitstun = ((*player2_addr).offset(0xC).read_unaligned() | 0b000001) != 0;
+
+    p1_in_hitstun || p2_in_hitstun
+}
+
 async fn vibrate_device(dev: Arc<ButtplugClientDevice>, strength: f64) {
     let config = CONFIG.get().expect("config should exist");
 
     if dev.message_attributes().scalar_cmd().is_some() {
         if let Err(e) = dev
-            .vibrate(&VibrateCommand::Speed((strength * config.vibration_strength).clamp(0.0, 1.0)))
+            .vibrate(&VibrateCommand::Speed(
+                (strength * config.vibration_strength).clamp(0.0, 1.0),
+            ))
             .await
         {
             log::error!("Error sending vibrate command to device! {}", e);
             return;
         }
+    } else {
+        log::trace!("{} doesn't vibrate! This code should be updated to handle rotation and linear movement!", dev.name());
+    }
+}
 
-        log::trace!("{} should start vibrating!", dev.name());
-        sleep(Duration::from_millis(config.vibration_time)).await;
-
+async fn stop_vibration(dev: Arc<ButtplugClientDevice>) {
+    if dev.message_attributes().scalar_cmd().is_some() {
         if let Err(e) = dev.stop().await {
-            log::error!("Error stopping device: {e}")
+            log::error!("error vibrating device: {e}");
         }
-        log::trace!("{} should stop vibrating!", dev.name());
     } else {
         log::trace!("{} doesn't vibrate! This code should be updated to handle rotation and linear movement!", dev.name());
     }

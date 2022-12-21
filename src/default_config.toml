@@ -1,9 +1,6 @@
-# device vibration strength, must be between 0.0 and 1.0
+# device vibration mutliplier
+# increase or decrease this depending on how strong you want the vibration
 vibration_strength = 1.0
-
-# each hit accumulates some amount of vibration time, set in milliseconds
-# warning: setting this too high might keep your device vibrating for a while!
-vibration_time = 300
 
 # log levels: ERROR, WARN, INFO, DEBUG, TRACE
 log_level = "ERROR"
